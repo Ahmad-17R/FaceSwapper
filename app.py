@@ -10,7 +10,7 @@ API_KEY = "7e8538e57dmshef265340e4bf000p140341jsn9216783a5995"
 API_HOST = "cartoon-yourself.p.rapidapi.com"
 API_URL = "https://cartoon-yourself.p.rapidapi.com/facebody/api/portrait-animation/portrait-animation"
 
-CARTOON_STYLE = "honkong"
+CARTOON_STYLE = "hongkong"
 UPLOAD_FOLDER = "uploads"
 RESULT_FOLDER = "results"
 MAX_RESOLUTION = (2000, 2000)
