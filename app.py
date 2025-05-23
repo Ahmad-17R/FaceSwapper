@@ -1,14 +1,19 @@
 import os
 import uuid
 import requests
+import base64
+import time
 from PIL import Image
 from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
 
-API_KEY = "7e8538e57dmshef265340e4bf000p140341jsn9216783a5995"
-API_HOST = "cartoon-yourself.p.rapidapi.com"
-API_URL = "https://cartoon-yourself.p.rapidapi.com/facebody/api/portrait-animation/portrait-animation"
+# API keys and constants
+IMGBB_API_KEY = "1728fd23e8dd52a4e2296153ab4504db"
+FACE_SWAP_API_KEY = "aec81f77e11c4b09743a025d585942a075bc08f1cb4c8ab968eb878c337138c8"
+CARTOON_API_KEY = "7e8538e57dmshef265340e4bf000p140341jsn9216783a5995"
+CARTOON_API_HOST = "cartoon-yourself.p.rapidapi.com"
+CARTOON_API_URL = "https://cartoon-yourself.p.rapidapi.com/facebody/api/portrait-animation/portrait-animation"
 
 CARTOON_STYLE = "hongkong"
 UPLOAD_FOLDER = "uploads"
@@ -17,6 +22,84 @@ MAX_RESOLUTION = (2000, 2000)
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULT_FOLDER, exist_ok=True)
+
+def upload_to_imgbb(api_key, image_path):
+    with open(image_path, "rb") as f:
+        encoded_image = base64.b64encode(f.read()).decode()
+
+    payload = {
+        "key": api_key,
+        "image": encoded_image
+    }
+
+    response = requests.post("https://api.imgbb.com/1/upload", data=payload)
+    if response.status_code == 200:
+        return response.json()["data"]["url"]
+    else:
+        raise Exception(f"Failed to upload image to imgbb: {response.text}")
+
+def call_face_swap_api(api_key, target_image_url, swap_image_url):
+    url = "https://api.piapi.ai/api/v1/task"
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "Qubico/image-toolkit",
+        "task_type": "face-swap",
+        "input": {
+            "target_image": target_image_url,
+            "swap_image": swap_image_url
+        }
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        data = response.json()
+        if data.get("code") == 200 and "data" in data:
+            task_id = data["data"]["task_id"]
+            return task_id
+        else:
+            raise Exception(f"Error in face swap response: {data}")
+    else:
+        raise Exception(f"Face swap request failed: {response.status_code} - {response.text}")
+
+def poll_face_swap_task(api_key, task_id, max_attempts=20, wait_seconds=3):
+    url = f"https://api.piapi.ai/api/v1/task/{task_id}"
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+
+    for attempt in range(1, max_attempts + 1):
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Failed to get task status: {response.status_code} - {response.text}")
+
+        data = response.json()
+        status = data["data"].get("status", "unknown")
+
+        if status == "Completed":
+            output = data["data"].get("output")
+            if output and "image_url" in output:
+                image_url = output["image_url"]
+                img_response = requests.get(image_url)
+                if img_response.status_code == 200:
+                    swapped_path = os.path.join(RESULT_FOLDER, f"swapped_{uuid.uuid4().hex}.jpg")
+                    with open(swapped_path, "wb") as f:
+                        f.write(img_response.content)
+                    return swapped_path
+                else:
+                    raise Exception(f"Failed to download swapped image: {img_response.status_code}")
+            else:
+                raise Exception("No image_url found in face swap output.")
+        elif status == "Failed":
+            error = data["data"].get("error", {})
+            raise Exception(f"Face swap task failed: {error.get('message', 'No error message provided')}")
+
+        time.sleep(wait_seconds)
+
+    raise Exception("Face swap task did not complete within the given attempts.")
 
 def resize_image(image_path):
     img = Image.open(image_path)
@@ -34,11 +117,11 @@ def cartoonify_image(image_path, style):
         files = {"image": img_file}
         data = {"type": style}
         headers = {
-            "x-rapidapi-key": API_KEY,
-            "x-rapidapi-host": API_HOST,
+            "x-rapidapi-key": CARTOON_API_KEY,
+            "x-rapidapi-host": CARTOON_API_HOST,
         }
 
-        response = requests.post(API_URL, headers=headers, files=files, data=data)
+        response = requests.post(CARTOON_API_URL, headers=headers, files=files, data=data)
 
         if response.status_code == 200:
             resp_json = response.json()
@@ -53,25 +136,55 @@ def cartoonify_image(image_path, style):
                 else:
                     raise Exception("Failed to download cartoon image.")
             else:
-                raise Exception("No image URL found in response.")
+                raise Exception("No image URL found in cartoon API response.")
         else:
             raise Exception(f"Cartoonify API error: {response.status_code}, {response.text}")
 
-@app.route("/cartoonify", methods=["POST"])
-def cartoonify_endpoint():
-    if "image" not in request.files:
-        return jsonify({"error": "No image file uploaded"}), 400
+@app.route("/swap-and-cartoonify", methods=["POST"])
+def swap_and_cartoonify_endpoint():
+    start_time = time.time()
 
-    image = request.files["image"]
-    filename = f"{uuid.uuid4().hex}_{image.filename}"
-    image_path = os.path.join(UPLOAD_FOLDER, filename)
-    image.save(image_path)
+    if "target_image" not in request.files or "swap_image" not in request.files:
+        return jsonify({"error": "Both target_image and swap_image files are required"}), 400
+
+    target_image = request.files["target_image"]
+    swap_image = request.files["swap_image"]
+
+    target_filename = f"{uuid.uuid4().hex}_{target_image.filename}"
+    swap_filename = f"{uuid.uuid4().hex}_{swap_image.filename}"
+
+    target_path = os.path.join(UPLOAD_FOLDER, target_filename)
+    swap_path = os.path.join(UPLOAD_FOLDER, swap_filename)
+
+    target_image.save(target_path)
+    swap_image.save(swap_path)
 
     try:
-        output_path = cartoonify_image(image_path, CARTOON_STYLE)
-        return send_file(output_path, mimetype="image/png")
+        # Step 1: Upload images to imgbb
+        target_url = upload_to_imgbb(IMGBB_API_KEY, target_path)
+        swap_url = upload_to_imgbb(IMGBB_API_KEY, swap_path)
+
+        # Step 2: Perform face swap
+        task_id = call_face_swap_api(FACE_SWAP_API_KEY, target_url, swap_url)
+        swapped_image_path = poll_face_swap_task(FACE_SWAP_API_KEY, task_id)
+
+        # Step 3: Cartoonify the swapped image
+        cartoon_image_path = cartoonify_image(swapped_image_path, CARTOON_STYLE)
+
+        # Step 4: Calculate and print total time taken
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"Total time taken for the entire process: {total_time:.2f} seconds")
+
+        return send_file(cartoon_image_path, mimetype="image/png")
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        # Clean up temporary files
+        for path in [target_path, swap_path]:
+            if os.path.exists(path):
+                os.remove(path)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=7860)
