@@ -16,7 +16,7 @@ app = Flask(__name__)
 # API keys and constants
 IMGBB_API_KEY = "1728fd23e8dd52a4e2296153ab4504db"
 FACE_SWAP_API_KEY = "aec81f77e11c4b09743a025d585942a075bc08f1cb4c8ab968eb878c337138c8"
-CARTOON_API_KEY = "7e8538e57dmshef265340e4bf000p140341jsn9216783a5995"
+CARTOON_API_KEY = "cd0026142fmsh6acf1b6045d0a92p1b7597jsn062e4a854da6"
 CARTOON_API_HOST = "cartoon-yourself.p.rapidapi.com"
 CARTOON_API_URL = "https://cartoon-yourself.p.rapidapi.com/facebody/api/portrait-animation/portrait-animation"
 
