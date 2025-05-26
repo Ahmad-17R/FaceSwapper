@@ -6,6 +6,7 @@ import time
 import logging
 from PIL import Image
 from flask import Flask, request, send_file, jsonify
+from urllib.parse import urlparse
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,12 +17,12 @@ app = Flask(__name__)
 # API keys and constants
 IMGBB_API_KEY = "1728fd23e8dd52a4e2296153ab4504db"
 FACE_SWAP_API_KEY = "aec81f77e11c4b09743a025d585942a075bc08f1cb4c8ab968eb878c337138c8"
-CARTOON_API_KEY = "cd0026142fmsh6acf1b6045d0a92p1b7597jsn062e4a854da6"
-CARTOON_API_HOST = "cartoon-yourself.p.rapidapi.com"
-CARTOON_API_URL = "https://cartoon-yourself.p.rapidapi.com/facebody/api/portrait-animation/portrait-animation"
-
-CARTOON_STYLE = "hongkong"
-UPLOAD_FOLDER = "/tmp/uploads"  # Use /tmp for Render compatibility
+AILAB_API_KEY = "hdHWR8y2CzDeEakTlJ7rtKG9sj1qZtRvBbYUZJUnMPELVFQfz55uiNCbj36c7NBV"
+AILAB_API_URL = "https://www.ailabapi.com/api/image/effects/ai-anime-generator"
+AILAB_QUERY_URL = "https://www.ailabapi.com/api/image/asyn-task-results"
+CARTOON_STYLE = 1  # Two-dimensional (2D) style
+TASK_TYPE = "GENERATE_CARTOONIZED_IMAGE"
+UPLOAD_FOLDER = "/tmp/uploads"
 RESULT_FOLDER = "/tmp/results"
 MAX_RESOLUTION = (2000, 2000)
 
@@ -136,41 +137,103 @@ def resize_image(image_path):
     logger.info("No resizing needed")
     return image_path
 
-def cartoonify_image(image_path, style):
+def validate_image(image_path):
+    """Validate the input image according to AILabTools API requirements."""
+    valid_formats = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+    max_size_mb = 10
+
+    # Check file extension
+    if not os.path.splitext(image_path)[1].lower() in valid_formats:
+        raise ValueError(f"Image format must be one of {valid_formats}")
+
+    # Check file size
+    if os.path.getsize(image_path) > max_size_mb * 1024 * 1024:
+        raise ValueError(f"Image size must not exceed {max_size_mb} MB")
+
+    return True
+
+def cartoonify_image(image_path, cartoon_style):
     logger.info(f"Cartoonifying image: {image_path}")
     image_path = resize_image(image_path)
 
-    with open(image_path, "rb") as img_file:
-        files = {"image": img_file}
-        data = {"type": style}
-        headers = {
-            "x-rapidapi-key": CARTOON_API_KEY,
-            "x-rapidapi-host": CARTOON_API_HOST,
+    # Validate image
+    try:
+        validate_image(image_path)
+    except ValueError as e:
+        logger.error(f"Image validation failed: {str(e)}")
+        raise Exception(f"Image validation failed: {str(e)}")
+
+    # Send image to AILabTools API
+    headers = {
+        "ailabapi-api-key": AILAB_API_KEY
+    }
+    with open(image_path, 'rb') as image_file:
+        files = {
+            'image': (os.path.basename(image_path), image_file),
         }
+        data = {
+            'task_type': 'async',
+            'index': cartoon_style
+        }
+        response = requests.post(AILAB_API_URL, headers=headers, files=files, data=data)
+        if response.status_code != 200:
+            logger.error(f"AILabTools API request failed: {response.status_code} - {response.text}")
+            raise Exception(f"AILabTools API request failed: {response.status_code} - {response.text}")
+        
+        response_data = response.json()
+        if response_data.get("error_code") != 0:
+            logger.error(f"AILabTools API error: {response_data.get('error_msg')}")
+            raise Exception(f"AILabTools API error: {response_data.get('error_msg')}")
+        
+        request_id = response_data.get("request_id")
+        logger.info(f"Cartoonification task initiated with request ID: {request_id}")
 
-        response = requests.post(CARTOON_API_URL, headers=headers, files=files, data=data)
+    # Poll for task completion
+    max_attempts = 360
+    for attempt in range(max_attempts):
+        params = {
+            "job_id": request_id,
+            "type": TASK_TYPE
+        }
+        query_response = requests.get(AILAB_QUERY_URL, headers=headers, params=params)
+        if query_response.status_code != 200:
+            logger.error(f"Failed to query task status: {query_response.status_code} - {query_response.text}")
+            raise Exception(f"Failed to query task status: {query_response.status_code} - {query_response.text}")
 
-        if response.status_code == 200:
-            resp_json = response.json()
-            image_url = resp_json.get("data", {}).get("image_url")
-            if image_url:
-                logger.info(f"Downloading cartoonified image from: {image_url}")
-                download_response = requests.get(image_url)
+        query_data = query_response.json()
+        if query_data.get("error_code") != 0:
+            logger.error(f"AILabTools query API error: {query_data.get('error_msg')}")
+            raise Exception(f"AILabTools query API error: {query_data.get('error_msg')}")
+
+        task_status = query_data.get("data", {}).get("status")
+        result_url = query_data.get("data", {}).get("result_url")
+        logger.info(f"Attempt {attempt + 1}: Task status = {task_status}")
+
+        if task_status == "PROCESS_SUCCESS":
+            if result_url:
+                download_response = requests.get(result_url)
                 if download_response.status_code == 200:
-                    output_path = os.path.join(RESULT_FOLDER, f"cartoon_{uuid.uuid4().hex}.png")
+                    parsed_url = urlparse(result_url)
+                    filename = os.path.basename(parsed_url.path)
+                    output_path = os.path.join(RESULT_FOLDER, f"cartoon_{uuid.uuid4().hex}_{filename}")
                     with open(output_path, "wb") as f:
                         f.write(download_response.content)
                     logger.info(f"Cartoonified image saved to: {output_path}")
                     return output_path
                 else:
-                    logger.error("Failed toa to download cartoon image")
-                    raise Exception("Failed to download cartoon image.")
+                    logger.error(f"Failed to download cartoon image: {download_response.status_code}")
+                    raise Exception(f"Failed to download cartoon image: {download_response.status_code}")
             else:
-                logger.error("No image URL found in cartoon API response")
-                raise Exception("No image URL found in cartoon API response.")
-        else:
-            logger.error(f"Cartoonify API error: {response.status_code}, {response.text}")
-            raise Exception(f"Cartoonify API error: {response.status_code}, {response.text}")
+                logger.error("No result URL found in response")
+                raise Exception("No result URL found in response")
+        elif task_status in ["PROCESS_FAILED", "TIMEOUT_FAILED", "LIMIT_RETRY_FAILED"]:
+            logger.error(f"Cartoonification task failed with status: {task_status}")
+            raise Exception(f"Cartoonification task failed with status: {task_status}")
+
+        time.sleep(5)
+
+    logger.error("Cartoonification task did not complete within 30 minutes")
+    raise Exception("Cartoonification task did not complete within 30 minutes")
 
 @app.route("/swap-and-cartoonify", methods=["POST"])
 def swap_and_cartoonify_endpoint():
