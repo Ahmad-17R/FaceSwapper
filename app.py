@@ -15,14 +15,13 @@ logger = logging.getLogger(__name__)
 # Constants / API Keys
 IMGBB_API_KEY = "1728fd23e8dd52a4e2296153ab4504db"
 FACE_SWAP_API_KEY = "aec81f77e11c4b09743a025d585942a075bc08f1cb4c8ab968eb878c337138c8"
-AILAB_API_KEY = "Xo2ALYhoKs01siSpQf2RmY7PDO4eaDvv5MkFlyWCTfnczGTSNIHrAV8wEJMjxqqe"
+AILAB_API_KEY = "0gFRV1T2fNMHzbBe4OnwmsOVphqQqIGf6XrwJZIsL5uE0y6Feo8Rcik3lQXydMi1"
 AILAB_API_URL = "https://www.ailabapi.com/api/image/effects/ai-anime-generator"
 AILAB_QUERY_URL = "https://www.ailabapi.com/api/image/asyn-task-results"
 
 CARTOON_STYLE = 1  # 2D look
 TASK_TYPE = "GENERATE_CARTOONIZED_IMAGE"
 MAX_RESOLUTION = (2000, 2000)
-
 
 # Utility Functions
 
@@ -36,7 +35,6 @@ def validate_image(image_data, filename):
         raise ValueError(f"Image size must be <= {max_size_mb} MB")
     return True
 
-
 def resize_image(image_data):
     logger.info("Checking if image needs resizing...")
     img = Image.open(BytesIO(image_data))
@@ -47,7 +45,6 @@ def resize_image(image_data):
         logger.info("Image resized")
         return output.getvalue()
     return image_data
-
 
 def upload_to_imgbb(api_key, image_data):
     logger.info("Uploading image to imgbb...")
@@ -60,7 +57,6 @@ def upload_to_imgbb(api_key, image_data):
         return url
     logger.error(f"imgbb upload failed: {response.text}")
     raise Exception(response.text)
-
 
 # Face Swap Logic
 
@@ -82,7 +78,6 @@ def call_face_swap_api(api_key, target_url, swap_url):
     logger.error(f"Face swap API failed: {data}")
     raise Exception(data)
 
-
 def poll_face_swap_task(api_key, task_id, max_attempts=40, wait_seconds=3):
     logger.info(f"Polling task {task_id}...")
     url = f"https://api.piapi.ai/api/v1/task/{task_id}"
@@ -98,12 +93,14 @@ def poll_face_swap_task(api_key, task_id, max_attempts=40, wait_seconds=3):
             image_url = data["data"]["output"].get("image_url")
             if image_url:
                 result = requests.get(image_url)
-                return result.content if result.ok else Exception("Image download failed")
+                if result.ok:
+                    return result.content
+                else:
+                    raise Exception("Image download failed")
         elif status.lower() in ["failed", "timeout_failed"]:
             raise Exception(f"Task failed with status: {status}")
         time.sleep(wait_seconds)
     raise Exception("Polling timed out.")
-
 
 # Cartoonify Logic
 
@@ -115,7 +112,7 @@ def cartoonify_image(image_data, style_index, filename):
     files = {"image": (filename, image_data)}
     data = {"task_type": "async", "index": style_index}
     
-    response = requests.post(AILAB_API_URL, headers=headers, files=files, data=data, verify=False)
+    response = requests.post(AILAB_API_URL, headers=headers, files=files, data=data)
     response_data = response.json()
 
     if not response.ok or response_data.get("error_code") != 0:
@@ -134,13 +131,15 @@ def cartoonify_image(image_data, style_index, filename):
         if status == "PROCESS_SUCCESS":
             result_url = query_data["data"]["result_url"]
             final_img = requests.get(result_url)
-            return final_img.content if final_img.ok else Exception("Final image download failed")
+            if final_img.ok:
+                return final_img.content
+            else:
+                raise Exception("Final image download failed")
         elif status in ["PROCESS_FAILED", "TIMEOUT_FAILED", "LIMIT_RETRY_FAILED"]:
             raise Exception(f"Task failed: {status}")
         time.sleep(5)
 
     raise Exception("Cartoonify process timed out.")
-
 
 # API Endpoint
 
@@ -173,7 +172,6 @@ def swap_and_cartoonify_endpoint():
     except Exception as e:
         logger.error(f"Processing failed: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
 
 # Run App
 if __name__ == "__main__":
