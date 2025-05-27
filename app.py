@@ -16,7 +16,7 @@ app = Flask(__name__)
 # API keys and constants
 IMGBB_API_KEY = "1728fd23e8dd52a4e2296153ab4504db"
 FACE_SWAP_API_KEY = "aec81f77e11c4b09743a025d585942a075bc08f1cb4c8ab968eb878c337138c8"
-AILAB_API_KEY = "hdHWR8y2CzDeEakTlJ7rtKG9sj1qZtRvBbYUZJUnMPELVFQfz55uiNCbj36c7NBV"
+AILAB_API_KEY = "Xo2ALYhoKs01siSpQf2RmY7PDO4eaDvv5MkFlyWCTfnczGTSNIHrAV8wEJMjxqqe"
 AILAB_API_URL = "https://www.ailabapi.com/api/image/effects/ai-anime-generator"
 AILAB_QUERY_URL = "https://www.ailabapi.com/api/image/asyn-task-results"
 CARTOON_STYLE = 1  # Two-dimensional (2D) style
