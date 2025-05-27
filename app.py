@@ -6,7 +6,7 @@ import logging
 from io import BytesIO
 from PIL import Image
 from flask import Flask, request, send_file, jsonify
-
+import os
 # Config
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -175,4 +175,5 @@ def swap_and_cartoonify_endpoint():
 
 # Run App
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
